@@ -1,4 +1,27 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<script>
+/* ============================================================
+   यहाँ अपना Firebase config चिपकाएँ (Firebase Console → Project settings → Your apps → Web app → Config)
+   ============================================================ */
+window.HFPO_FIREBASE = {
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  storageBucket: "",
+  messagingSenderId: "",
+  appId: ""
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-app-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-auth-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-firestore-compat.js"></script>
+<style>body{margin:0}img{max-width:100%}</style>
+</head>
+<body>
 <title>हस्तम सदस्य ऋण</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -254,7 +277,31 @@ const COLLS=['users','apps','entries','settings'];
 function lsGet(k){try{return JSON.parse(localStorage.getItem('hfpo_'+k)||'null')}catch(e){return null}}
 function lsSet(k,v){try{localStorage.setItem('hfpo_'+k,JSON.stringify(v));return true}catch(e){return false}}
 function emit(){S.listeners.forEach(f=>f())}
+/* ---- Firebase (GitHub / अपनी वेबसाइट पर साझा डेटा) ---- */
+const FBC=window.HFPO_FIREBASE||{};const EMAIL_DOMAIN='@hastam-fpo.in';
+const FB={app:null,auth:null,fs:null,unsubs:[],staff:null};
+const toEmail=u=>u.includes('@')?u:u+EMAIL_DOMAIN;
+function fbListen(ref,coll){return new Promise(res=>{let first=true;const done=()=>{if(first){first=false;res()}};
+  const un=ref.onSnapshot(snap=>{const o={};snap.forEach(d=>{o[d.id]=Object.assign({id:d.id},d.data())});S.cache[coll]=o;if(first)done();else emit()},err=>{console.warn('fb',coll,err);done()});
+  FB.unsubs.push(un);setTimeout(done,10000)})}
+async function fbAttach(){FB.unsubs.forEach(u=>{try{u()}catch(e){}});FB.unsubs=[];FB.staff=null;S.cache.users={};S.cache.apps={};S.cache.entries={};
+  const u=FB.auth.currentUser;if(!u)return;
+  let sd=null;try{const d=await FB.fs.doc('users/'+u.uid).get();sd=d.exists?d.data():null}catch(e){sd=null}
+  if(sd&&sd.active!==false){FB.staff=Object.assign({id:u.uid},sd);await Promise.all([fbListen(FB.fs.collection('users'),'users'),fbListen(FB.fs.collection('apps'),'apps'),fbListen(FB.fs.collection('entries'),'entries')])}
+  else await fbListen(FB.fs.collection('apps').where('ownerUid','==',u.uid),'apps')}
+function fbErr(e){const c=(e&&e.code)||'';if(c.includes('permission'))return 'अनुमति नहीं है (permission denied) – Firestore Rules जाँचें';if(c.includes('unavailable'))return 'इंटरनेट कनेक्शन जाँचें';
+  if(['auth/invalid-credential','auth/wrong-password','auth/user-not-found','auth/invalid-email','auth/invalid-login-credentials'].includes(c))return 'यूज़रनेम या पासवर्ड गलत है';
+  if(c==='auth/email-already-in-use')return 'यह यूज़रनेम पहले से बना हुआ है';if(c==='auth/weak-password')return 'पासवर्ड कम से कम 6 अक्षर का हो';
+  if(c==='auth/operation-not-allowed')return 'Firebase में Email/Password और Anonymous लॉगिन चालू करें';if(c==='auth/requires-recent-login')return 'लॉग आउट करके दोबारा लॉगिन करें, फिर पासवर्ड बदलें';
+  if(c==='auth/too-many-requests')return 'बहुत अधिक प्रयास – कुछ देर बाद कोशिश करें';return (e&&e.message)||'त्रुटि'}
 async function initStore(){
+  if(window.firebase&&FBC.apiKey){S.mode='fb';
+    FB.app=firebase.initializeApp(FBC);FB.auth=firebase.auth();FB.fs=firebase.firestore();
+    await new Promise(res=>{const un=FB.auth.onAuthStateChanged(()=>{un();res()})});
+    S.cache.config={};
+    await Promise.all([fbListen(FB.fs.collection('settings'),'settings'),fbListen(FB.fs.collection('config'),'config')]);
+    FB.unsubs=[];/* settings/config listeners stay on */
+    await fbAttach();return}
   let db=null;
   try{if(window.claude&&typeof window.claude.use==='function')db=await window.claude.use('db')}catch(e){db=null}
   if(db){
@@ -266,18 +313,20 @@ async function initStore(){
 }
 async function put(c,id,data){
   const doc=clone(data);delete doc.id;
-  if(S.mode==='db'){try{await S.db.collection(c).doc(id).set(doc)}catch(e){if(e&&e.code==='unavailable'){await sleep(600);await S.db.collection(c).doc(id).set(doc)}else throw new Error(e&&e.code==='invalid_argument'?'आपको यह जानकारी सहेजने की अनुमति नहीं है।':(e&&e.message)||'सहेजा नहीं जा सका')}}
+  if(S.mode==='fb'){try{await FB.fs.collection(c).doc(id).set(doc)}catch(e){throw new Error(fbErr(e))}}
+  else if(S.mode==='db'){try{await S.db.collection(c).doc(id).set(doc)}catch(e){if(e&&e.code==='unavailable'){await sleep(600);await S.db.collection(c).doc(id).set(doc)}else throw new Error(e&&e.code==='invalid_argument'?'आपको यह जानकारी सहेजने की अनुमति नहीं है।':(e&&e.message)||'सहेजा नहीं जा सका')}}
   S.cache[c]=Object.assign({},S.cache[c],{[id]:Object.assign({id},doc)});
-  if(S.mode!=='db'&&!lsSet(c,S.cache[c]))throw new Error('ब्राउज़र स्टोरेज भर गया');
+  if(S.mode==='local'&&!lsSet(c,S.cache[c]))throw new Error('ब्राउज़र स्टोरेज भर गया');
   emit();
 }
 const FC={};
 async function getFile(fid){if(FC[fid])return FC[fid];let d=null;
-  try{if(S.mode==='db'){const s=await S.db.doc('files/'+fid).get();d=s.exists?s.data():null}else d=lsGet('file_'+fid)}catch(e){d=null}
+  try{if(S.mode==='fb'){const s=await FB.fs.doc('files/'+fid).get();d=s.exists?s.data():null}else if(S.mode==='db'){const s=await S.db.doc('files/'+fid).get();d=s.exists?s.data():null}else d=lsGet('file_'+fid)}catch(e){d=null}
   if(d)FC[fid]=d;return d}
-async function putFile(fid,d){if(S.mode==='db'){await S.db.doc('files/'+fid).set(d)}else if(!lsSet('file_'+fid,d))throw new Error('ब्राउज़र स्टोरेज भर गया — फोटो छोटी करके पुनः प्रयास करें');FC[fid]=d}
-async function delFile(fid){try{if(S.mode==='db')await S.db.doc('files/'+fid).delete();else localStorage.removeItem('hfpo_file_'+fid)}catch(e){}delete FC[fid]}
+async function putFile(fid,d){if(S.mode==='fb'){d=Object.assign({},d,{ownerUid:FB.auth.currentUser.uid});try{await FB.fs.doc('files/'+fid).set(d)}catch(e){throw new Error(fbErr(e))}}else if(S.mode==='db'){await S.db.doc('files/'+fid).set(d)}else if(!lsSet('file_'+fid,d))throw new Error('ब्राउज़र स्टोरेज भर गया — फोटो छोटी करके पुनः प्रयास करें');FC[fid]=d}
+async function delFile(fid){try{if(S.mode==='fb')await FB.fs.doc('files/'+fid).delete();else if(S.mode==='db')await S.db.doc('files/'+fid).delete();else localStorage.removeItem('hfpo_file_'+fid)}catch(e){}delete FC[fid]}
 async function nextNo(key){
+  if(S.mode==='fb'){const ref=FB.fs.doc('meta/counters');try{return await FB.fs.runTransaction(async t=>{const s=await t.get(ref);const d=s.exists?s.data():{};const n=(+d[key]||0)+1;t.set(ref,{[key]:n},{merge:true});return n})}catch(e){throw new Error(fbErr(e))}}
   if(S.mode==='db'){const ref=S.db.doc('meta/counters');const holder=uid();
     for(let i=0;i<25;i++){const r=await ref.acquire({holder,ttlMs:5000});
       if(r.acquired){const s=await ref.get();const d=s.exists?Object.assign({},s.data()):{};const n=(+d[key]||0)+1;d[key]=n;await ref.set(d);return n}
@@ -329,7 +378,8 @@ function allocate(L,amt){const sch=clone(L.schedule);let rem=r2(amt),I=0,P=0;
 
 /* ============ session ============ */
 async function hpw(u,p){const s='hopcl|'+u.toLowerCase()+'|'+p;try{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))|0;return 'x'+h}}
-function CU(){const id=ss('user');const u=id&&S.cache.users[id];return u&&u.active!==false?u:null}
+function CU(){if(S.mode==='fb'){const u=FB.auth&&FB.auth.currentUser;if(!u)return null;const s=S.cache.users[u.uid]||(FB.staff&&FB.staff.id===u.uid?FB.staff:null);return s&&s.active!==false?Object.assign({id:u.uid},s):null}
+  const id=ss('user');const u=id&&S.cache.users[id];return u&&u.active!==false?u:null}
 const isBM=u=>u&&(u.role==='bm'||u.role==='subadmin');
 function log(app,action,note){app.log=(app.log||[]).concat({t:nowISO(),by:(CU()&&CU().name)||'ग्राहक',action,note:note||''})}
 
@@ -415,8 +465,8 @@ VIEWS.landing=()=>{const s=SET();const u=CU();return `<div class="land"><header 
 <main class="wrap land-main"><p class="lede">कृषि इनपुट, कृषि एवं संबद्ध व्यवसायों हेतु शेयरधारक सदस्यों के लिए ऋण सुविधा</p>
 <div class="doors"><button class="door" onclick="A.go('${u?'dash':'login'}')">${IC.staff}<b>एफपीओ स्टाफ एवं एडमिन लॉगिन</b><span>एडमिन, सब-एडमिन, शाखा प्रबंधक एवं लेखाकार के लिए</span><span class="go">${u?esc(u.name)+' – डैशबोर्ड खोलें →':'लॉगिन करें →'}</span></button>
 <button class="door cust" onclick="A.startApply()">${IC.cust}<b>ग्राहक ऋण आवेदन</b><span>आवेदन फॉर्म भरें, आधार, पैन एवं फोटो अपलोड करें और जमा करें</span><span class="go">आवेदन शुरू करें →</span></button></div>
-<p class="addr">शाखा: ${esc(s.address)}</p></main></div>`};
-VIEWS.login=()=>{const hasAdmin=Object.values(S.cache.users).some(u=>u.role==='admin'&&u.active!==false);
+${S.mode==='local'&&!window.claude?'<div class="note b" style="margin-top:20px">ऑनलाइन डेटाबेस जुड़ा नहीं है – अभी डेटा केवल इसी ब्राउज़र में सहेजा जाएगा, दूसरे मोबाइल/कंप्यूटर पर नहीं दिखेगा।</div>':''}<p class="addr">शाखा: ${esc(s.address)}</p></main></div>`};
+VIEWS.login=()=>{const hasAdmin=S.mode==='fb'?!!(S.cache.config&&S.cache.config.setup):Object.values(S.cache.users).some(u=>u.role==='admin'&&u.active!==false);
   if(!hasAdmin)return `<div class="auth"><div class="card stack"><h2>पहला एडमिन खाता बनाएं</h2><p class="muted">सिस्टम में अभी कोई उपयोगकर्ता नहीं है। एडमिन खाता बनाने के बाद एडमिन अन्य स्टाफ (सब-एडमिन, शाखा प्रबंधक, लेखाकार) जोड़ सकेगा।</p>
   <label class="fld"><span>नाम</span><input id="su_name"></label><label class="fld"><span>यूज़रनेम</span><input id="su_user" autocomplete="off"></label><label class="fld"><span>पासवर्ड (कम से कम 6 अक्षर)</span><input id="su_pw" type="password"></label>
   <button class="btn" onclick="A.setupAdmin()">एडमिन खाता बनाएं</button><button class="btn ghost" onclick="A.go('landing')">← वापस</button></div></div>`;
@@ -600,8 +650,8 @@ VIEWS.cashbook=p=>{const from=p.from||monthStart(),to=p.to||today();let oc=0,ob=
 
 /* admin */
 VIEWS.users=()=>{if(CU().role!=='admin')return shell('<div class="note b">केवल एडमिन</div>');const us=Object.values(S.cache.users).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  return shell(ph('उपयोगकर्ता','स्टाफ लॉगिन बनाएं एवं प्रबंधित करें')+`<div class="tw"><table class="t"><thead><tr><th>नाम</th><th>यूज़रनेम</th><th>भूमिका</th><th>स्थिति</th><th></th></tr></thead><tbody>${us.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${ROLES[u.role]}</td><td>${u.active===false?'<span class="pill bad">निष्क्रिय</span>':'<span class="pill ok">सक्रिय</span>'}</td><td><div class="row"><button class="btn sm ghost" onclick="A.resetPw('${u.id}')">पासवर्ड बदलें</button>${u.id!==CU().id?`<button class="btn sm ghost" onclick="A.toggleUser('${u.id}')">${u.active===false?'सक्रिय करें':'निष्क्रिय करें'}</button>`:''}</div></td></tr>`).join('')}</tbody></table></div>
-  <section class="sec"><h3>नया उपयोगकर्ता जोड़ें</h3><div class="grid"><label class="fld"><span>नाम</span><input id="u_name"></label><label class="fld"><span>यूज़रनेम</span><input id="u_user" autocomplete="off"></label><label class="fld"><span>पासवर्ड</span><input id="u_pw" type="password" autocomplete="new-password"></label><label class="fld"><span>भूमिका</span><select id="u_role">${Object.keys(ROLES).map(r=>`<option value="${r}">${ROLES[r]}</option>`).join('')}</select></label></div><div><button class="btn" onclick="A.addUser()">उपयोगकर्ता जोड़ें</button></div></section>`)};
+  return shell(ph('उपयोगकर्ता','स्टाफ लॉगिन बनाएं एवं प्रबंधित करें')+`<div class="tw"><table class="t"><thead><tr><th>नाम</th><th>यूज़रनेम</th><th>भूमिका</th><th>स्थिति</th><th></th></tr></thead><tbody>${us.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${ROLES[u.role]}</td><td>${u.active===false?'<span class="pill bad">निष्क्रिय</span>':'<span class="pill ok">सक्रिय</span>'}</td><td><div class="row">${S.mode!=='fb'||u.id===CU().id?`<button class="btn sm ghost" onclick="A.resetPw('${u.id}')">पासवर्ड बदलें</button>`:''}${u.id!==CU().id?`<button class="btn sm ghost" onclick="A.toggleUser('${u.id}')">${u.active===false?'सक्रिय करें':'निष्क्रिय करें'}</button>`:''}</div></td></tr>`).join('')}</tbody></table></div>
+  ${S.mode==='fb'?'<div class="note">कोई स्टाफ पासवर्ड भूल जाए तो उसका खाता निष्क्रिय करके नए यूज़रनेम से नया खाता बनाएं। हर व्यक्ति लॉगिन करके अपना पासवर्ड स्वयं बदल सकता है।</div>':''}<section class="sec"><h3>नया उपयोगकर्ता जोड़ें</h3><div class="grid"><label class="fld"><span>नाम</span><input id="u_name"></label><label class="fld"><span>यूज़रनेम</span><input id="u_user" autocomplete="off"></label><label class="fld"><span>पासवर्ड</span><input id="u_pw" type="password" autocomplete="new-password"></label><label class="fld"><span>भूमिका</span><select id="u_role">${Object.keys(ROLES).map(r=>`<option value="${r}">${ROLES[r]}</option>`).join('')}</select></label></div><div><button class="btn" onclick="A.addUser()">उपयोगकर्ता जोड़ें</button></div></section>`)};
 VIEWS.settings=()=>{if(CU().role!=='admin')return shell('<div class="note b">केवल एडमिन</div>');const s=SET();
   return shell(ph('उत्पाद एवं सेटिंग','ऋण उत्पादों की ब्याज दर एवं प्रोसेसिंग शुल्क')+`<section class="sec"><h3>ऋण उत्पाद</h3><div class="tw"><table class="t"><thead><tr><th>उत्पाद का नाम</th><th>पुनर्भुगतान विधि</th><th>ब्याज दर (% वार्षिक)</th><th>प्रोसेसिंग शुल्क (% राशि का)</th></tr></thead><tbody>${Object.keys(s.products).map(k=>`<tr><td><input id="p_${k}_name" value="${esc(s.products[k].name)}"></td><td>${METHOD_DESC[k]}</td><td><input id="p_${k}_rate" type="number" step="0.01" min="0" value="${esc(s.products[k].rate)}"></td><td><input id="p_${k}_fee" type="number" step="0.01" min="0" value="${esc(s.products[k].fee)}"></td></tr>`).join('')}</tbody></table></div></section>
   <section class="sec"><h3>कंपनी एवं शाखा</h3><div class="grid"><label class="fld full"><span>कंपनी का नाम (अंग्रेज़ी)</span><input id="s_co" value="${esc(s.company)}"></label><label class="fld full"><span>कंपनी का नाम (हिंदी)</span><input id="s_cohi" value="${esc(s.companyHi)}"></label><label class="fld"><span>शाखा</span><input id="s_br" value="${esc(s.branch)}"></label><label class="fld full"><span>शाखा का पता</span><textarea id="s_addr" rows="2">${esc(s.address)}</textarea></label></div></section><div><button class="btn" onclick="A.saveSettings()">सेटिंग सहेजें</button></div>`)};
@@ -619,26 +669,33 @@ const A={go,showDoc,closeModal,R:()=>R,
      app[group][kind]=ids;await put('apps',appId,app);if(!multi)for(const o of old)await delFile(o);toast('अपलोड हो गया')}
    catch(e){toast(e.message||'अपलोड विफल','bad')}finally{busy(false)}dirty=false;render()},
  async rmFile(appId,group,kind,fid){busy(true);try{const app=clone(S.cache.apps[appId]);app[group][kind]=(app[group][kind]||[]).filter(x=>x!==fid);await put('apps',appId,app);await delFile(fid)}catch(e){toast(e.message,'bad')}finally{busy(false)}dirty=false;render()},
- startApply(){const id=ss('cust');const a=id&&S.cache.apps[id];if(a&&a.status!=='draft')ss('cust',null);go('apply',{step:1})},
+ async startApply(){if(S.mode==='fb'&&!FB.auth.currentUser){busy(true);try{await FB.auth.signInAnonymously();await fbAttach()}catch(e){busy(false);return toast(fbErr(e),'bad')}busy(false)}
+   const id=ss('cust');const a=id&&S.cache.apps[id];if(a&&a.status!=='draft')ss('cust',null);go('apply',{step:1})},
  newApply(){ss('cust',null);go('apply',{step:1})},
  prodChange(){const r=document.querySelector('input[name="f_product"]:checked');const t=$('#f_tenure');if(!t)return;if(r&&r.value!=='emi'){t.value='12';t.disabled=true}else t.disabled=false},
  async saveForm(){const o=readForm();const err=validate(o);if(err)return toast(err,'bad');busy(true);
    try{let id=ss('cust');let app=id&&S.cache.apps[id];
      if(app&&app.status==='draft'){app=clone(app);app.form=o;log(app,'आवेदन फॉर्म संशोधित')}
-     else{const d=today();id='APP-'+fyCode(d)+'-'+pad(await nextNo('a'+fyCode(d)));app={status:'draft',createdAt:nowISO(),form:o,cdocs:{},log:[]};log(app,'आवेदन फॉर्म भरा गया');ss('cust',id)}
+     else{const d=today();id='APP-'+fyCode(d)+'-'+pad(await nextNo('a'+fyCode(d)));app={status:'draft',createdAt:nowISO(),form:o,cdocs:{},log:[]};if(S.mode==='fb')app.ownerUid=FB.auth.currentUser.uid;log(app,'आवेदन फॉर्म भरा गया');ss('cust',id)}
      await put('apps',id,app);busy(false);go('apply',{step:2})}catch(e){busy(false);toast(e.message||'सहेजा नहीं जा सका','bad')}},
  async submitApp(){const id=ss('cust');const a=S.cache.apps[id];if(!a)return;busy(true);try{const app=clone(a);app.status='submitted';app.submittedAt=nowISO();log(app,'ग्राहक द्वारा आवेदन जमा','आधार, पैन एवं फोटो सहित');await put('apps',id,app);busy(false);go('apply',{step:'done'})}catch(e){busy(false);toast(e.message,'bad')}},
  async setupAdmin(){const n=$('#su_name').value.trim(),u=$('#su_user').value.trim().toLowerCase(),p=$('#su_pw').value;if(!n||!u||p.length<6)return toast('नाम, यूज़रनेम एवं 6+ अक्षर का पासवर्ड भरें','bad');
+   if(S.mode==='fb'){busy(true);try{const cred=await FB.auth.createUserWithEmailAndPassword(toEmail(u),p);const b=FB.fs.batch();
+       b.set(FB.fs.doc('users/'+cred.user.uid),{name:n,username:u,role:'admin',active:true,createdAt:nowISO()});b.set(FB.fs.doc('config/setup'),{by:cred.user.uid,at:nowISO()});await b.commit();await fbAttach();busy(false);go('dash')}catch(e){busy(false);toast(fbErr(e),'bad')}return}
    busy(true);try{const id='U'+uid();await put('users',id,{name:n,username:u,role:'admin',active:true,pw:await hpw(u,p),createdAt:nowISO()});ss('user',id);busy(false);go('dash')}catch(e){busy(false);toast(e.message,'bad')}},
- async login(){const u=$('#l_user').value.trim().toLowerCase(),p=$('#l_pw').value;const usr=Object.values(S.cache.users).find(x=>x.username===u);
+ async login(){const u=$('#l_user').value.trim().toLowerCase(),p=$('#l_pw').value;
+   if(S.mode==='fb'){if(!u||!p)return toast('यूज़रनेम एवं पासवर्ड भरें','bad');busy(true);try{await FB.auth.signInWithEmailAndPassword(toEmail(u),p);await fbAttach();if(!FB.staff){await FB.auth.signOut();await fbAttach();throw new Error('यह खाता स्टाफ के रूप में सक्रिय नहीं है – एडमिन से संपर्क करें')}busy(false);go('dash')}catch(e){busy(false);toast(e.code?fbErr(e):e.message,'bad')}return}const usr=Object.values(S.cache.users).find(x=>x.username===u);
    if(!usr||usr.pw!==await hpw(u,p))return toast('यूज़रनेम या पासवर्ड गलत है','bad');if(usr.active===false)return toast('यह खाता निष्क्रिय है – एडमिन से संपर्क करें','bad');ss('user',usr.id);go('dash')},
- logout(){ss('user',null);go('landing')},
+ async logout(){ss('user',null);if(S.mode==='fb'){busy(true);try{await FB.auth.signOut();await fbAttach()}catch(e){}busy(false)}go('landing')},
  async addUser(){const n=$('#u_name').value.trim(),u=$('#u_user').value.trim().toLowerCase(),p=$('#u_pw').value,r=$('#u_role').value;
    if(!n||!u||p.length<6)return toast('नाम, यूज़रनेम एवं 6+ अक्षर का पासवर्ड भरें','bad');if(Object.values(S.cache.users).some(x=>x.username===u))return toast('यह यूज़रनेम पहले से है','bad');
+   if(S.mode==='fb'){busy(true);try{const sec=firebase.apps.find(a=>a.name==='sec')||firebase.initializeApp(FBC,'sec');try{await sec.auth().setPersistence(firebase.auth.Auth.Persistence.NONE)}catch(e){}
+       const cred=await sec.auth().createUserWithEmailAndPassword(toEmail(u),p);await sec.auth().signOut();await put('users',cred.user.uid,{name:n,username:u,role:r,active:true,createdAt:nowISO()});toast('उपयोगकर्ता जोड़ा गया')}catch(e){toast(e.code?fbErr(e):e.message,'bad')}busy(false);dirty=false;render();return}
    busy(true);try{await put('users','U'+uid(),{name:n,username:u,role:r,active:true,pw:await hpw(u,p),createdAt:nowISO()});toast('उपयोगकर्ता जोड़ा गया')}catch(e){toast(e.message,'bad')}busy(false);dirty=false;render()},
  async toggleUser(id){const u=clone(S.cache.users[id]);u.active=u.active===false;busy(true);try{await put('users',id,u)}catch(e){toast(e.message,'bad')}busy(false);dirty=false;render()},
  resetPw(id){modal(`<div class="m-h"><b>पासवर्ड बदलें – ${esc(S.cache.users[id].name)}</b></div><label class="fld"><span>नया पासवर्ड (6+ अक्षर)</span><input id="np" type="password"></label><div class="row"><button class="btn" onclick="A.doReset('${id}')">सहेजें</button><button class="btn ghost" onclick="A.closeModal()">रद्द</button></div>`)},
- async doReset(id){const p=$('#np').value;if(p.length<6)return toast('6+ अक्षर का पासवर्ड','bad');const u=clone(S.cache.users[id]);u.pw=await hpw(u.username,p);busy(true);try{await put('users',id,u);toast('पासवर्ड बदल गया')}catch(e){toast(e.message,'bad')}busy(false);closeModal()},
+ async doReset(id){const p=$('#np').value;if(p.length<6)return toast('6+ अक्षर का पासवर्ड','bad');
+   if(S.mode==='fb'){busy(true);try{await FB.auth.currentUser.updatePassword(p);toast('पासवर्ड बदल गया')}catch(e){toast(fbErr(e),'bad')}busy(false);closeModal();return}const u=clone(S.cache.users[id]);u.pw=await hpw(u.username,p);busy(true);try{await put('users',id,u);toast('पासवर्ड बदल गया')}catch(e){toast(e.message,'bad')}busy(false);closeModal()},
  async saveSettings(){const s=SET();const prods={};for(const k of Object.keys(s.products))prods[k]={name:$(`#p_${k}_name`).value.trim()||s.products[k].name,rate:$(`#p_${k}_rate`).value,fee:+$(`#p_${k}_fee`).value||0};
    busy(true);try{await put('settings','main',{company:$('#s_co').value.trim(),companyHi:$('#s_cohi').value.trim(),branch:$('#s_br').value.trim(),address:$('#s_addr').value.trim(),products:prods});toast('सेटिंग सहेजी गई')}catch(e){toast(e.message,'bad')}busy(false);dirty=false;render()},
  async forward(id){const to=$('#fw_to').value;const note=$('#fw_note').value.trim();busy(true);try{const app=clone(S.cache.apps[id]);app.assignedTo=to;app.status='forwarded';log(app,'फाइल फॉरवर्ड की गई',S.cache.users[to].name+(note?' – '+note:''));await put('apps',id,app);toast('फॉरवर्ड हो गया')}catch(e){toast(e.message,'bad')}busy(false);dirty=false;render()},
@@ -679,4 +736,5 @@ window.A=A;window.$=$;
 (async()=>{await initStore();render()})();
 </script>
 
-</body></html>
+</body>
+</html>
