@@ -196,6 +196,9 @@ table.t{width:100%;border-collapse:collapse;font-size:14px}
 .toast.bad{background:var(--bad);color:#fff}
 #busy{position:fixed;inset:0;z-index:70;background:rgba(10,20,14,.35);display:grid;place-items:center}
 #busy div{background:var(--surface);padding:14px 20px;border-radius:10px;font-weight:600}
+.pwwrap{position:relative;display:block}
+.pwwrap input{padding-right:84px}
+.pwbtn{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:var(--surface2);color:var(--brand);font-weight:600;font-size:13px;padding:4px 10px;border-radius:6px;cursor:pointer}
 .loading{padding:60px 16px;text-align:center;color:var(--muted)}
 /* paper documents: fixed print colours by design */
 .paper{width:794px;background:#fff;color:#141414;padding:34px 40px;font-family:"Mukta","Noto Sans Devanagari",sans-serif;font-size:12.5px;line-height:1.45;margin:0 auto}
@@ -267,7 +270,10 @@ function inWords(num){num=Math.round(+num||0);if(!num)return 'Rupees Zero Only';
   return 'Rupees '+s.trim()+' Only'}
 function toast(msg,kind='ok'){const t=document.createElement('div');t.className='toast '+kind;t.textContent=msg;$('#toasts').appendChild(t);setTimeout(()=>t.remove(),4200)}
 function busy(on){$('#busy').hidden=!on}
-function modal(html,wide){const m=$('#modal');m.innerHTML=`<div class="mbox ${wide?'wide':''}">${html}</div>`;m.hidden=false}
+function pwToggles(root){(root||document).querySelectorAll('input[type=password]:not([data-pw])').forEach(i=>{i.dataset.pw='1';const w=document.createElement('span');w.className='pwwrap';i.parentNode.insertBefore(w,i);w.appendChild(i);
+  const b=document.createElement('button');b.type='button';b.className='pwbtn';b.textContent='👁 दिखाएं';b.setAttribute('aria-label','पासवर्ड दिखाएं');
+  b.addEventListener('click',e=>{e.preventDefault();const show=i.type==='password';i.type=show?'text':'password';b.textContent=show?'🙈 छिपाएं':'👁 दिखाएं';b.setAttribute('aria-label',show?'पासवर्ड छिपाएं':'पासवर्ड दिखाएं');i.focus()});w.appendChild(b)})}
+function modal(html,wide){const m=$('#modal');m.innerHTML=`<div class="mbox ${wide?'wide':''}">${html}</div>`;m.hidden=false;pwToggles(m)}
 function closeModal(){const m=$('#modal');m.hidden=true;m.innerHTML=''}
 function ss(k,v){try{if(v===undefined)return sessionStorage.getItem('hfpo_'+k);if(v===null)sessionStorage.removeItem('hfpo_'+k);else sessionStorage.setItem('hfpo_'+k,v)}catch(e){return null}}
 
@@ -388,7 +394,7 @@ let R={v:'landing',p:{}};let dirty=false;const VIEWS={},AFTER={};
 function go(v,p){R={v,p:p||{}};dirty=false;render();window.scrollTo(0,0)}
 function render(){const fn=VIEWS[R.v]||VIEWS.landing;const staffView=!['landing','login','apply'].includes(R.v);
   if(staffView&&!CU()){R={v:'login',p:{}}}
-  $('#app').innerHTML=VIEWS[R.v](R.p);if(AFTER[R.v])AFTER[R.v](R.p);hydrate()}
+  $('#app').innerHTML=VIEWS[R.v](R.p);if(AFTER[R.v])AFTER[R.v](R.p);pwToggles($('#app'));hydrate()}
 S.listeners.add(()=>{if(!dirty&&$('#modal').hidden&&$('#busy').hidden)render()});
 document.addEventListener('input',e=>{if(e.target.closest('#app'))dirty=true});
 
