@@ -20,7 +20,10 @@ service cloud.firestore {
       allow create: if isAdmin()
         || (signedIn() && request.auth.uid == uid && request.resource.data.role == 'admin'
             && !exists(setupPath()) && existsAfter(setupPath()));
-      allow update: if isAdmin();
+      allow update, delete: if isAdmin();
+    }
+    match /secrets/{uid} {
+      allow read, write: if isAdmin();
     }
     match /apps/{id} {
       allow read: if isStaff() || (signedIn() && resource.data.ownerUid == request.auth.uid);
